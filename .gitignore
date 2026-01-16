@@ -194,3 +194,6 @@ data/processed/
 
 # OS
 .DS_Store
+
+# Kaggle credentials / cache
+.kaggle/
