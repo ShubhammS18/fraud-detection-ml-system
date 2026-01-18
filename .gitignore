@@ -197,3 +197,5 @@ data/processed/
 
 # Kaggle credentials / cache
 .kaggle/
+
+artifacts/
