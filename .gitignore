@@ -199,3 +199,6 @@ data/processed/
 .kaggle/
 
 artifacts/
+
+# MLflow
+mlruns/
