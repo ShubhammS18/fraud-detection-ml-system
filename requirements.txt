@@ -6,3 +6,5 @@ lightgbm
 pydantic
 pyarrow
 joblib
+pytest
+httpx
