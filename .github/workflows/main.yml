@@ -26,6 +26,7 @@ jobs:
 
     - name: Run Tests
       run: |
+        mkdir -p logs
         python -m pytest tests/
 
     - name: Build Docker Image
