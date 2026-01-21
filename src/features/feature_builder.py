@@ -31,16 +31,21 @@ def build_features(df: pd.DataFrame,target_col: str | None = None,is_training: b
 
     df = df.copy()
 
+    # Ensuring TransactionAmt is numeric before math, or it crashes on strings
+    if "TransactionAmt" in df.columns:
+        df["TransactionAmt"] = pd.to_numeric(df["TransactionAmt"], errors='coerce').fillna(0)
+    
+    if "TransactionDT" in df.columns:
+        df["TransactionDT"] = pd.to_numeric(df["TransactionDT"], errors='coerce').fillna(0)
+
     y = None
     if is_training and target_col is not None:
         y = df[target_col]
         df = df.drop(columns=[target_col])
 
-    
     # Time-based feature
     if "TransactionDT" in df.columns:
         df["transaction_hour"] = (df["TransactionDT"] // SECONDS_IN_HOUR) % 24
-
 
     # Transaction amount transformation
     if "TransactionAmt" in df.columns:
