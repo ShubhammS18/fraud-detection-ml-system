@@ -1,0 +1,12 @@
+{
+    "model_name": "lightgbm_v2_pruned",
+    "num_features": 133,
+    "auc": 0.965171801580769,
+    "ks": 0.8226558825182447,
+    "recall_at_1pct_fpr": 0.7665134285022985,
+    "recall_at_05pct_fpr": 0.7248971691265425,
+    "optimal_threshold": 0.1399156882001524,
+    "fraud_rate": 0.03499000914417313,
+    "training_rows": 590540,
+    "notes": "LightGBM after feature pruning v2"
+}
