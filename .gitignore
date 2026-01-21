@@ -198,7 +198,8 @@ data/processed/
 # Kaggle credentials / cache
 .kaggle/
 
-artifacts/
+artifacts/*
+!artifacts/lightgbm_v2_pruned.json
 
 # MLflow
 mlruns/
