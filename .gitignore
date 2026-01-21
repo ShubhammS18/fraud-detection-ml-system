@@ -202,3 +202,5 @@ artifacts/
 
 # MLflow
 mlruns/
+
+.dockerignore
