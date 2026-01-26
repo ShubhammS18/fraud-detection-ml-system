@@ -12,18 +12,21 @@ from src.utils.logger import logger
 # App initialization
 app = FastAPI(
     title="Fraud Detection API",
-    version="1.0",
-    description="Inference API for LightGBM fraud detection model"
+    version="2.0",
+    description="Inference API for Identity-Enhanced LightGBM fraud detection model"
 )
 
 
 # Loading model ONCE
-MODEL_PATH = "artifacts/lightgbm_v2_pruned.json"
-SCHEMA_PATH = "artifacts/schema/lightgbm_v2_schema.json"
+MODEL_PATH = "artifacts/lightgbm_identity_final.json"
+SCHEMA_PATH = "artifacts/schema/schema_identity_final.json"
+STATS_PATH = "artifacts/schema/reference_stats.json"
+
 
 try:
-    predictor = FraudPredictor(model_path=MODEL_PATH, schema_path=SCHEMA_PATH)
+    predictor = FraudPredictor(model_path=MODEL_PATH, schema_path=SCHEMA_PATH, stats_path=STATS_PATH)
 except Exception as e:
+    logger.error(f"Critical System Failure: Model Load Error - {str(e)}")
     raise RuntimeError(f"Failed to load model: {e}")
 
 
@@ -34,9 +37,9 @@ class PredictRequest(BaseModel):
 
 
 class PredictResponse(BaseModel):
-    prediction: List[int]
-    probability: List[float]
-    actions: List[str]
+    prediction: int
+    probability: float
+    action: str
 
 
 
@@ -66,26 +69,14 @@ async def predict(request_data: PredictRequest, request: Request):
         # 3. Prediction
         results = predictor.predict(df)
         
-        #Business Logic Thresholding
-        actions = []
-        for prob in results["probability"]:
-            if prob >= 0.50:
-                actions.append("BLOCK_AND_CHALLENGE") # e.g. Trigger SMS/EMail OTP
-            elif prob >= 0.10:
-                actions.append("MANUAL_REVIEW_REQUIRED")
-            else:
-                actions.append("APPROVE")
-        
-        results["actions"] = actions
-        
         latency = time.time() - start_time
         
         # 4. Logging the Success with metadata (Inference time & Confidence)
         logger.info("Prediction successful", extra={
             "request_id": request_id,
             "latency_ms": round(latency * 1000, 2),
-            "avg_probability": sum(results["probability"]) / len(results["probability"]),
-            "primary_action": actions[0] if actions else "NONE"
+            "probability": results["probability"],
+            "primary_action": results["action"]
         })
         
         return results
@@ -96,4 +87,4 @@ async def predict(request_data: PredictRequest, request: Request):
             "request_id": request_id,
             "error": str(e)
         })
-        raise HTTPException(status_code=500, detail="Inference failed")
+        raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")

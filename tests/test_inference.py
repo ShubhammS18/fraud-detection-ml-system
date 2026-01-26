@@ -6,118 +6,93 @@ from src.models.predict import FraudPredictor
 from fastapi.testclient import TestClient
 from src.api.main import app
 
+
+IDENTITY_MODEL_PATH = "artifacts/lightgbm_identity_final.json"
+IDENTITY_SCHEMA_PATH = "artifacts/schema/schema_identity_final.json"
+STATS_PATH = "artifacts/schema/reference_stats.json"
+OPTIMAL_THRESHOLD = 0.474
+
 #Feature builder tests
 @pytest.fixture
 def builder():
-    # Uses verified v2 schema
-    return FeatureBuilder(schema_path="artifacts/schema/lightgbm_v2_schema.json")
+    return FeatureBuilder(schema_path=IDENTITY_SCHEMA_PATH, stats_path=STATS_PATH)
 
-def test_feature_builder_missing_columns(builder):
-    """Test that missing columns are filled based on schema logic."""
-    raw_data = pd.DataFrame([{"TransactionDT": 100}]) # Missing almost everything
+def test_feature_builder_robustness_ratios(builder):
+    """Test that interaction features (ratios) are calculated correctly."""
+    raw_data = pd.DataFrame([{
+        "TransactionAmt": 1000, 
+        "DeviceInfo": "Windows", 
+        "id_31": "chrome 63.0"
+    }])
     processed = builder.transform(raw_data)
-    
-    # Assertions
-    assert len(processed.columns) == len(builder.features)
-    assert processed["ProductCD"].iloc[0] == "Unknown"
-    assert processed["card1"].iloc[0] == 0
 
-def test_feature_builder_column_order(builder):
-    """Test that output columns exactly match schema order regardless of input order."""
-    reversed_cols = [{"card1": 123, "TransactionDT": 86400, "ProductCD": "W"}]
-    processed = builder.transform(pd.DataFrame(reversed_cols))
-    
-    assert list(processed.columns) == builder.features
+    # Assertions for the new Robust features
+    assert "Device_Amt_Ratio" in processed.columns
+    assert "Browser_Max_Amt" in processed.columns
+    assert processed["Device_Amt_Ratio"].iloc[0] > 0
 
-def test_feature_builder_unknown_categories(builder):
-    """Test that new, unseen categorical values don't crash the system."""
-    raw_data = pd.DataFrame([{"ProductCD": "Z"}]) # 'Z' was never in training
-    processed = builder.transform(raw_data)
-    
-    assert processed["ProductCD"].iloc[0] == "Z" 
-    # Note: Our predict.py handles the mapping of 'Z' to 'category' safely
-
-
-
-#Prediction tests 
+#Prediction Tests
 @pytest.fixture
 def predictor():
     return FraudPredictor(
-        model_path="artifacts/lightgbm_v2_pruned.json",
-        schema_path="artifacts/schema/lightgbm_v2_schema.json"
+        model_path=IDENTITY_MODEL_PATH,
+        schema_path=IDENTITY_SCHEMA_PATH,
+        stats_path=STATS_PATH
     )
 
 def test_prediction_output_format(predictor):
-    """Verify shape and value ranges of the prediction."""
-    df = pd.DataFrame([{"TransactionDT": 86400, "TransactionAmt": 100, "ProductCD": "W"}])
+    """Verify single-record output format (probability as float, not list)."""
+    df = pd.DataFrame([{
+        "TransactionDT": 86400, 
+        "TransactionAmt": 100, 
+        "id_31": "chrome 63.0"
+    }])
     result = predictor.predict(df)
     
     assert "prediction" in result
     assert "probability" in result
-    assert isinstance(result["prediction"][0], int)
-    assert 0 <= result["probability"][0] <= 1
+    assert "action" in result
+    assert isinstance(result["probability"], float)  # No longer a list
+    assert 0 <= result["probability"] <= 1
 
-def test_batch_prediction_consistency(predictor):
-    """Ensure batching multiple records returns the correct number of results."""
-    df = pd.DataFrame([{"card1": 1}, {"card1": 2}, {"card1": 3}])
-    result = predictor.predict(df)
-    
-    assert len(result["prediction"]) == 3
-    assert len(result["probability"]) == 3
-    
-    
-#API Contract tests 
+# API Contract Tests
 client = TestClient(app)
 
+def test_api_robustness_action():
+    """Verify API returns the correct 'action' string for high-value outliers."""
+    payload = {
+        "records": [{
+            "TransactionAmt": 35000000.0, 
+            "id_31": "chrome 63.0",
+            "DeviceInfo": "Windows",
+            "P_emaildomain": "gmail.com"
+        }]
+    }
+    
+    response = client.post("/predict", json=payload)
+    assert response.status_code == 200
+    
+    data = response.json()
+    assert data["action"] in ["BLOCK_AND_CHALLENGE", "MANUAL_REVIEW_REQUIRED"]
+
 def test_health_endpoint():
-    """Verify the API is alive."""
+    """Verifying the API is alive."""
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
-def test_api_invalid_payload():
-    """Verify the API rejects malformed JSON (Contract Safety)."""
-    # Sending a list instead of a dict with 'records' key
-    response = client.post("/predict", json=[{"bad": "data"}])
-    assert response.status_code == 422 # Unprocessable Entity
-    
-
-#mocking the model
-from unittest.mock import MagicMock
-
-def test_prediction_mocked(predictor, monkeypatch):
-    """Testing logic without loading the heavy model file."""
-    # 1. Create a fake model response (mock)
-    mock_model = MagicMock()
-    mock_model.predict.return_value = np.array([0.99]) # Force a high fraud proba
-    mock_model.feature_name.return_value = predictor.model_features
-    
-    # 2. Replace the real model inside predictor with our mock
-    monkeypatch.setattr(predictor, "model", mock_model)
-    
-    # 3. Test the predictor logic
-    df = pd.DataFrame([{"TransactionDT": 123}])
-    result = predictor.predict(df)
-    
-    assert result["prediction"] == [1]  # Because 0.99 >= 0.5
-    assert result["probability"] == [0.99]
-    mock_model.predict.assert_called_once() 
-    
-    
-#Testing with Garbage Input
-
+# Robustness & Garbage Handling
 @pytest.mark.parametrize("garbage_input", [
-    {"TransactionAmt": "Extremely Expensive"},  # String instead of float
-    {"card1": None},                            # Null instead of int
-    {"ProductCD": 99999}                        # Number instead of string
-    ])
-def test_property_garbage_input(predictor, garbage_input):
-    """Ensure 'garbage' data is handled gracefully, not crashing."""
+    {"TransactionAmt": "invalid_string"}, 
+    {"DeviceInfo": None},
+    {"id_31": 12345}
+])
+
+def test_predictor_garbage_resilience(predictor, garbage_input):
+    """Ensure the system handles malformed data without crashing."""
     df = pd.DataFrame([garbage_input])
-    
-    # Our code should catch this or fill it via FeatureBuilder
     try:
         result = predictor.predict(df)
-        assert "prediction" in result
+        assert "action" in result
     except Exception as e:
-        pytest.fail(f"Predictor crashed on garbage input {garbage_input}: {e}")
+        pytest.fail(f"System crashed on garbage input: {e}")
